@@ -54,5 +54,8 @@ services:
       - "1883:1883"
     volumes:
       - manager-data:/storage
+      # Read-only view of the proxy's certificates so the MQTT mTLS acceptor can serve the same
+      # certificate the proxy does
+      - proxy-data:/storage/proxy:ro
     env_file:
       - env
