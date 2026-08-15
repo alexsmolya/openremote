@@ -36,7 +36,16 @@ dependencies {
   testImplementation libs.niftyModbusApi
   testImplementation libs.niftyModbusCore
 
-  testImplementation libs.moquette
+  testImplementation(libs.moquette) {
+    // Moquette pins netty-tcnative 2.0.69 to match its own netty 4.1.x, but this build forces netty
+    // to 4.2.x, whose OpenSslEngine calls SSL.setCurvesList(long, String[]) - a method that version
+    // of tcnative does not have. Merely having tcnative on the classpath makes netty prefer the
+    // OpenSSL provider, so SSLEngine.setSSLParameters throws NoSuchMethodError, the HiveMQ client
+    // mistakes that for its Android compatibility case and installs
+    // HttpsURLConnection.getDefaultHostnameVerifier(), which rejects every certificate. Dropping
+    // tcnative leaves netty on the JDK provider, matching the manager's runtime classpath.
+    exclude group: 'io.netty', module: 'netty-tcnative-boringssl-static'
+  }
   testImplementation libs.hiveMqttClient
 
   testImplementation libs.grpcNettyShaded
