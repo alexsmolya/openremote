@@ -664,6 +664,77 @@ class SimulatorProtocolTest extends Specification implements ManagerContainerTra
     }
   }
 
+  def "Check Simulator Agent protocol adds predicted datapoints for one-time occurrence for Europe/Amsterdam timezone"() {
+    when: "replayData is configured to add a datapoint 1 and 2 hours into tomorrow for Europe/Amsterdam timezone"
+    asset.addOrReplaceAttributes(new Attribute<>("test7", ValueType.TEXT).addMeta(
+                    new MetaItem<>(AGENT_LINK, new SimulatorAgentLink(agent.getId()).setReplayData(
+                            new SimulatorReplayDatapoint(HOUR_IN_SECONDS, "test"),
+                            new SimulatorReplayDatapoint(HOUR_IN_SECONDS * 2, "test"),
+                            ).setSchedule(new SimulatorProtocol.Schedule(
+                            LocalDateTime.ofInstant(Instant.parse("1970-01-02T00:00:00.000Z"), ZoneOffset.UTC), null, null
+                            )).setTimezone(TimeZone.getTimeZone("Europe/Amsterdam"))),
+                    new MetaItem<>(HAS_PREDICTED_DATA_POINTS, true))
+            )
+    asset = assetStorageService.merge(asset)
+    def attribute = asset.getAttribute("test7").get()
+    def attributeRef = new AttributeRef(asset.getId(), attribute.getName())
+
+    then: "the agent status should become CONNECTED and the attribute linked to the protocol"
+    conditions.eventually {
+      assetStorageService.find(agent.getId(), Agent.class).getAgentStatus().orElse(null) == ConnectionStatus.CONNECTED
+      protocol.linkedAttributes.get(attributeRef) == attribute
+    }
+
+    and: "the delay is 1 day"
+    conditions.eventually {
+      // The offset was applied to the start as well, delaying every one-time occurrence by an extra hour
+      scheduledFor(attributeRef)?.delay == DAY_IN_MILLIS
+    }
+
+    and: "the predicted datapoints are present"
+    conditions.eventually {
+      def datapoints = assetPredictedDatapointService.getDatapoints(attributeRef)
+      datapoints.size() == 2
+      // Stored in UTC, so 01:00 and 02:00 CET on the 2nd, instead of the local time as-is
+      datapoints.get(1).getTimestamp() == DAY_IN_MILLIS
+      datapoints.get(0).getTimestamp() == DAY_IN_MILLIS + HOUR_IN_MILLIS
+    }
+
+    when: "fast forward 1 day"
+    advancePseudoClock(1, DAYS, container)
+    scheduledFor(attributeRef).future.get() // resolve future manually, because we surpassed the delay
+
+    then: "the delay is 1 hour"
+    conditions.eventually {
+      scheduledFor(attributeRef)?.delay == HOUR_IN_MILLIS
+    }
+
+    and: "the predicted datapoints are present"
+    conditions.eventually {
+      def datapoints = assetPredictedDatapointService.getDatapoints(attributeRef)
+      datapoints.size() == 2
+      datapoints.get(1).getTimestamp() == DAY_IN_MILLIS
+      datapoints.get(0).getTimestamp() == DAY_IN_MILLIS + HOUR_IN_MILLIS
+    }
+
+    when: "fast forward 1 hour"
+    advancePseudoClock(1, HOURS, container)
+    scheduledFor(attributeRef).future.get() // resolve future manually, because we surpassed the delay
+
+    then: "nothing is scheduled anymore because the occurrence ended"
+    conditions.eventually {
+      scheduledFor(attributeRef) == null
+    }
+
+    and: "the last predicted datapoint is present"
+    conditions.eventually {
+      def datapoints = assetPredictedDatapointService.getDatapoints(attributeRef)
+      // Purging on the local time removed an extra hour of datapoints, including this one
+      datapoints.size() == 1
+      datapoints.get(0).getTimestamp() == DAY_IN_MILLIS + HOUR_IN_MILLIS
+    }
+  }
+
   def "Check Simulator Agent protocol adds predicted datapoints recurringly until"() {
     when: "replayData is configured to add a datapoint in 1, 2, and 3 hours and cutoff at 4 hours"
     asset.addOrReplaceAttributes(new Attribute<>("test7", ValueType.TEXT).addMeta(
